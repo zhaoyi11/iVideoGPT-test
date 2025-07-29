@@ -84,7 +84,7 @@ class Workspace:
         # for model training
         self.seg_replay_loader = make_segment_replay_loader(
             # self.work_dir / 'buffer', 
-            Path('/data/metaworld_datasets/mw-assembly'),
+            Path('/data/metaworld_datasets'),
             self.cfg.replay_buffer_size,
             self.cfg.world_model.batch_size, self.cfg.replay_buffer_num_workers,
             self.cfg.save_snapshot, self.cfg.nstep, self.cfg.discount,
@@ -150,7 +150,7 @@ class Workspace:
             # save snapshot
             if self.cfg.save_snapshot and self.global_step % 10_000 == 0:
                 self.video_predictor.save_snapshot(self.work_dir)
-            episode_step = 0
+                print(f'saved snapshot at {self.global_step}')
             
             # validate
             if self.global_step % 5_000 == 0:
@@ -168,7 +168,6 @@ class Workspace:
                 metrics = {k + "_init": v for k, v in metrics.items()}
                 self.logger.log_metrics(metrics, self.global_step, ty='train')
 
-            episode_step += 1
             self._global_step += 1
 
     def load_snapshot(self):

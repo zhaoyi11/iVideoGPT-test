@@ -57,7 +57,8 @@ class Workspace:
                                 self.cfg.agent)
 
         self.video_predictor = make_video_predictor(self.cfg.world_model)
-
+        # load snapshot
+        # self.video_predictor.load_snapshot('/home/zhaoy13/rl/iVideoGPT-test/mbrl/log_mbrl/2025.07.29')
         self.timer = drq_utils.Timer()
         self._global_step = 0
         self._global_episode = 0
