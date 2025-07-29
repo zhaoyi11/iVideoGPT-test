@@ -191,6 +191,7 @@ class ReplayBuffer(IterableDataset):
             self._try_fetch()
         except:
             traceback.print_exc()
+        
         self._samples_since_last_fetch += 1
         episode = self._sample_episode()
         # add +1 for the first dummy transition
@@ -223,6 +224,7 @@ class ReplaySegmentBuffer(ReplayBuffer):
             self._try_fetch()
         except:
             traceback.print_exc()
+
         self._samples_since_last_fetch += 1
         episode = self._sample_episode()
         idx = np.random.randint(1, episode_len(episode) - self._segment_length)

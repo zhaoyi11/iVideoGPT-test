@@ -249,6 +249,7 @@ class VideoPredictor(nn.Module):
                 reward_loss = F.mse_loss(reward_pred, rewards[:, args.context_length:])
                 loss = ce_loss + args.reward_weight * reward_loss
             else:
+                reward_loss = torch.zeros_like(ce_loss)
                 loss = ce_loss
 
         # loss.backward()

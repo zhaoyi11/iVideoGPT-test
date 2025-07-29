@@ -1,16 +1,18 @@
 defaults:
   - _self_
-  - task@_global_: coffee_push
+  # - task@_global_: coffee_push
   - override hydra/launcher: submitit_local
 
 # task settings
+task_name: mw-assembly
 frame_stack: 3
 action_repeat: 2
 discount: 0.99
 # train settings
+num_train_steps: 100100
 num_seed_frames: 4000
 # eval
-eval_every_frames: 20000
+eval_every_frames: 2000
 num_eval_episodes: 20
 # snapshot
 save_snapshot: true
