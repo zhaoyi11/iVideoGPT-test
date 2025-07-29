@@ -81,7 +81,7 @@ world_model:
   load_internal_llm: true
   llama_attn_drop: 0.1
   fast_reward_predictor: false
-  update_reward: true # whether to update the reward model. If is false when finetuning the world model with offline data.
+  update_reward: false # whether to update the reward model. If is false when finetuning the world model with offline data.
   symlog: true
 
   context_length: 2

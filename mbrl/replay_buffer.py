@@ -5,13 +5,16 @@
 import datetime
 import io
 import random
+import uuid
 import traceback
 from collections import defaultdict
-from pathlib import Path
+import pathlib
 import glob
+import os
+from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
-import os
 import torch
 import torch.nn as nn
 from torch.utils.data import IterableDataset
@@ -38,39 +41,63 @@ def load_episode(fn):
         episode = {k: episode[k] for k in episode.keys()}
         return episode
 
+def convert(value):
+  value = np.array(value)
+  if np.issubdtype(value.dtype, np.floating):
+    return value.astype(np.float32)
+  elif np.issubdtype(value.dtype, np.signedinteger):
+    return value.astype(np.int32)
+  elif np.issubdtype(value.dtype, np.uint8):
+    return value.astype(np.uint8)
+  return value
+
 
 class ReplayBufferStorage:
     def __init__(self, data_specs, replay_dir):
+        # create the base folder for storing the episodes
+        self._replay_dir = pathlib.Path(replay_dir).expanduser()
+        self._replay_dir.mkdir(parents=True, exist_ok=True)
+
         self._data_specs = data_specs
-        self._replay_dir = replay_dir
-        replay_dir.mkdir(exist_ok=True)
         self._current_episode = defaultdict(list)
         self._preload()
 
     def __len__(self):
         return self._num_transitions
-
+    
     def add(self, time_step):
+        """ Add one transition to the replay buffer. Save the episode when the episode is done."""
+        time_step = time_step._asdict()
+
         for spec in self._data_specs:
             value = time_step[spec.name]
             if np.isscalar(value):
+                assert spec.shape is not None
                 value = np.full(spec.shape, value, spec.dtype)
-            assert spec.shape == value.shape and spec.dtype == value.dtype
+            if isinstance(value, bool):
+                value = np.array(value, dtype=np.float32)
+            assert spec.dtype == value.dtype, f"Data type mismatch, expected {spec.dtype}, got {value.dtype}."
+            if spec.shape is not None: 
+                assert spec.shape == value.shape, f"Shape mismatch, expected {spec.shape}, got {value.shape}."
+
             self._current_episode[spec.name].append(value)
-        if time_step.last():
+
+        if time_step['done']:
             episode = dict()
             for spec in self._data_specs:
                 value = self._current_episode[spec.name]
                 episode[spec.name] = np.array(value, spec.dtype)
-            self._current_episode = defaultdict(list)
+
+            self._current_episode = defaultdict(list) # reset the current episode
             self._store_episode(episode)
-            return episode
+            self._current_task = None # reset the current task name
+
 
     def _preload(self):
         self._num_episodes = 0
         self._num_transitions = 0
-        for fn in self._replay_dir.glob('*.npz'):
-            _, _, eps_len = fn.stem.split('_')
+        for fn in self._replay_dir.rglob('*.npz'):
+            _, _, _, eps_len = fn.stem.split('-')
             self._num_episodes += 1
             self._num_transitions += int(eps_len)
 
@@ -80,7 +107,8 @@ class ReplayBufferStorage:
         self._num_episodes += 1
         self._num_transitions += eps_len
         ts = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
-        eps_fn = f'{ts}_{eps_idx}_{eps_len}.npz'
+        identifier = str(uuid.uuid4().hex)
+        eps_fn = f'{ts}-{identifier}-{eps_idx}-{eps_len}.npz'
         save_episode(episode, self._replay_dir / eps_fn)
         return self._replay_dir / eps_fn
 
@@ -115,23 +143,6 @@ class ReplayBuffer(IterableDataset):
         eps_fn = random.choice(self._episode_fns)
         return self._episodes[eps_fn]
 
-    def _direct_store_episode(self, episode):
-        eps_idx = self._num_direct_episodes
-        eps_len = episode_len(episode)
-        self._num_direct_episodes += 1
-        ts = datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
-        eps_fn = f'{ts}_{eps_idx}_{eps_len}.npz'
-
-        while eps_len + self._size > self._max_size:
-            early_eps_fn = self._episode_fns.pop(0)
-            early_eps = self._episodes.pop(early_eps_fn)
-            self._size -= episode_len(early_eps)
-        self._episode_fns.append(eps_fn)
-        # self._episode_fns.sort()
-        self._episodes[eps_fn] = episode
-        self._size += eps_len
-        return self._replay_dir / eps_fn
-
     def _store_episode(self, eps_fn):
         try:
             episode = load_episode(eps_fn)
@@ -160,17 +171,18 @@ class ReplayBuffer(IterableDataset):
             worker_id = torch.utils.data.get_worker_info().id
         except:
             worker_id = 0
-        eps_fns = sorted(self._replay_dir.glob('*.npz'), reverse=True)
+        eps_fns = sorted(self._replay_dir.rglob('*.npz'), reverse=True, key=lambda x: int(x.stem.split('-')[-2])) # sort according to episode index
         fetched_size = 0
         for eps_fn in eps_fns:
-            eps_idx, eps_len = [int(x) for x in eps_fn.stem.split('_')[1:]]
+            eps_idx, eps_len = [int(x) for x in eps_fn.stem.split('-')[2:]]
+
             if eps_idx % self._num_workers != worker_id:
                 continue
             if eps_fn in self._episodes.keys():
                 break
-            if fetched_size + eps_len > self._max_size:
+            if fetched_size + int(eps_len) > self._max_size:
                 break
-            fetched_size += eps_len
+            fetched_size += int(eps_len)
             if not self._store_episode(eps_fn):
                 break
 

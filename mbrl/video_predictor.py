@@ -1,4 +1,6 @@
 import os
+import sys
+sys.path.append('../')
 
 import time
 import numpy as np
@@ -45,6 +47,7 @@ def get_tokenizer(args):
         if not args.load_pretrained_model:
             vq_model = CompressiveVQModel.from_config(args.pretrained_model_name_or_path)
         else:
+            print(f"Loading vq_model from {args.pretrained_model_name_or_path}")
             vq_model = CompressiveVQModel.from_pretrained(
                 args.pretrained_model_name_or_path, subfolder=None, revision=None, variant=None, use_safetensor=True,
                 low_cpu_mem_usage=False, device_map=None,
@@ -82,6 +85,7 @@ def load_models(args):
                                 segment_length=args.segment_length, model_type=args.config_name.split('/')[-2],
                                 reward_prediction=True)
     if args.load_pretrained_model:
+        print(f"Loading transformer model from {args.pretrained_transformer_path}")
         state_dict = load_file(os.path.join(args.pretrained_transformer_path, 'model.safetensors'))
         if args.load_internal_llm:
             model.llm.load_state_dict(state_dict, strict=True)
@@ -104,6 +108,7 @@ class VideoPredictor(nn.Module):
         super(VideoPredictor, self).__init__()
 
         self.args = args
+        self.update_reward = args.update_reward
         self.device = device
         self.model, self.tokenizer = load_models(args)
         self.model = self.model.to(device)
@@ -240,8 +245,11 @@ class VideoPredictor(nn.Module):
 
             outputs, reward_pred = self.model(**model_input)
             ce_loss = outputs.loss
-            reward_loss = F.mse_loss(reward_pred, rewards[:, args.context_length:])
-            loss = ce_loss + args.reward_weight * reward_loss
+            if self.update_reward:
+                reward_loss = F.mse_loss(reward_pred, rewards[:, args.context_length:])
+                loss = ce_loss + args.reward_weight * reward_loss
+            else:
+                loss = ce_loss
 
         # loss.backward()
         self.model_scaler.scale(loss).backward()

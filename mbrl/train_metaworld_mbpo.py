@@ -32,9 +32,9 @@ from drqv2 import DrQV2Agent
 torch.backends.cudnn.benchmark = True
 
 
-def make_agent(obs_spec, action_spec, cfg):
-    cfg.obs_shape = obs_spec.shape
-    cfg.action_shape = action_spec.shape
+def make_agent(obs_shape, action_shape, cfg):
+    cfg.obs_shape = obs_shape
+    cfg.action_shape = action_shape
     return hydra.utils.instantiate(cfg)
 
 
@@ -52,8 +52,8 @@ class Workspace:
         self.device = torch.device(cfg.device)
         self.setup()
 
-        self.agent = make_agent(self.train_env.observation_spec(),
-                                self.train_env.action_spec(),
+        self.agent = make_agent(self.train_env.obs_space.image.shape,
+                                self.train_env.action_space.shape,
                                 self.cfg.agent)
 
         self.video_predictor = make_video_predictor(self.cfg.world_model)
@@ -67,15 +67,23 @@ class Workspace:
         self.logger = Logger(self.work_dir, use_tb=self.cfg.use_tb)
         # create envs
         self.cfg.task_name = "-".join(self.cfg.task_name.split("_"))
-        self.train_env = metaworld_env.make(self.cfg.task_name, self.cfg.frame_stack,
-                                       self.cfg.action_repeat, self.cfg.seed, self.cfg.camera, self.cfg.duration, self.cfg.succ_bonus)
-        self.eval_env = metaworld_env.make(self.cfg.task_name, self.cfg.frame_stack,
-                                      self.cfg.action_repeat, self.cfg.seed, self.cfg.camera, self.cfg.duration, self.cfg.succ_bonus)
+
+        self.train_env = metaworld_env.make(task_name=self.cfg.task_name, seed=self.cfg.seed, 
+                                            frame_stack=self.cfg.frame_stack, action_repeat=self.cfg.action_repeat)
+        self.eval_env = metaworld_env.make(task_name=self.cfg.task_name, seed=self.cfg.seed, 
+                                           frame_stack=self.cfg.frame_stack, action_repeat=self.cfg.action_repeat)
+
+        # self.train_env = metaworld_env.make(self.cfg.task_name, self.cfg.frame_stack,
+        #                                self.cfg.action_repeat, self.cfg.seed, self.cfg.camera, self.cfg.duration, self.cfg.succ_bonus)
+        # self.eval_env = metaworld_env.make(self.cfg.task_name, self.cfg.frame_stack,
+        #                               self.cfg.action_repeat, self.cfg.seed, self.cfg.camera, self.cfg.duration, self.cfg.succ_bonus)
         # create replay buffer
-        data_specs = (self.train_env.observation_spec(),
-                      self.train_env.action_spec(),
-                      specs.Array((1,), np.float32, 'reward'),
-                      specs.Array((1,), np.float32, 'discount'))
+        obs_shape = self.train_env.obs_space.image.shape
+        action_shape = self.train_env.action_space.shape
+        data_specs = (metaworld_env.specs(shape=obs_shape, dtype=np.uint8, name='observation'),
+                    metaworld_env.specs(shape=action_shape, dtype=np.float32, name='action'), # action is set to None to allow different action shapes
+                    metaworld_env.specs(shape=(1,), dtype=np.float32, name='reward'),
+                    metaworld_env.specs(shape=(1,), dtype=np.float32, name='discount'))
 
         self.replay_storage = ReplayBufferStorage(data_specs,
                                                   self.work_dir / 'buffer')
@@ -105,10 +113,10 @@ class Workspace:
             self.cfg.gen_horizon + self.cfg.world_model.context_length, demo_path)
         self._seg_replay_iter = None
 
-        self.video_recorder = VideoRecorder(
-            self.work_dir if self.cfg.save_video else None)
-        self.train_video_recorder = TrainVideoRecorder(
-            self.work_dir if self.cfg.save_train_video else None)
+        # self.video_recorder = VideoRecorder(
+        #     self.work_dir if self.cfg.save_video else None)
+        # self.train_video_recorder = TrainVideoRecorder(
+        #     self.work_dir if self.cfg.save_train_video else None)
 
     @property
     def global_step(self):
@@ -144,22 +152,22 @@ class Workspace:
         while eval_until_episode(episode):
             time_step = self.eval_env.reset()
             episode_success = 0
-            self.video_recorder.init(self.eval_env, enabled=(episode == 0))
-            while not time_step.last():
+            # self.video_recorder.init(self.eval_env, enabled=(episode == 0))
+            while not bool(time_step.done):
                 with torch.no_grad(), drq_utils.eval_mode(self.agent):
                     action = self.agent.act(time_step.observation,
                                             self.global_step,
                                             eval_mode=True)
                 time_step = self.eval_env.step(action)
-                self.video_recorder.record(self.eval_env, time_step.reward)
+                # self.video_recorder.record(self.eval_env, time_step.reward)
                 total_reward += time_step.reward
-                episode_success += time_step.success
+                # episode_success += time_step.success
                 step += 1
 
             total_success += episode_success >= 1.0
             episode += 1
             # self.video_recorder.save(f'{self.global_frame}.mp4')
-            self.video_recorder.save(f'{self.global_frame}.gif')
+            # self.video_recorder.save(f'{self.global_frame}.gif')
 
         with self.logger.log_and_dump_ctx(self.global_frame, ty='eval') as log:
             log('episode_reward', total_reward / episode)
@@ -264,15 +272,15 @@ class Workspace:
         episode_step, episode_reward, episode_success = 0, 0, 0
         time_step = self.train_env.reset()
         self.replay_storage.add(time_step)
-        self.train_video_recorder.init(time_step.observation)
+        # self.train_video_recorder.init(time_step.observation)
         metrics = None
         init_model = False
         init_gen = False
         while train_until_step(self.global_step):
-            if time_step.last():
+            if bool(time_step.done):
                 self._global_episode += 1
                 # self.train_video_recorder.save(f'{self.global_frame}.mp4')
-                self.train_video_recorder.save(f'{self.global_frame}.gif')
+                # self.train_video_recorder.save(f'{self.global_frame}.gif')
                 # wait until all the metrics schema is populated
                 if metrics is not None:
                     # log stats
@@ -292,7 +300,7 @@ class Workspace:
                 # reset env
                 time_step = self.train_env.reset()
                 self.replay_storage.add(time_step)
-                self.train_video_recorder.init(time_step.observation)
+                # self.train_video_recorder.init(time_step.observation)
                 # try to save snapshot
                 if self.cfg.save_snapshot and self._global_episode % 10 == 0:
                     self.save_snapshot()
@@ -362,12 +370,12 @@ class Workspace:
             # take env step
             time_step = self.train_env.step(action)
             episode_reward += time_step.reward
-            episode_success += time_step.success
-            if time_step.last():
+            # episode_success += time_step.success
+            if bool(time_step.done):
                 self.last_episode = self.replay_storage.add(time_step)
             else:
                 self.replay_storage.add(time_step)
-            self.train_video_recorder.record(time_step.observation)
+            # self.train_video_recorder.record(time_step.observation)
             episode_step += 1
             self._global_step += 1
 
